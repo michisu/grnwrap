@@ -1,0 +1,22 @@
+=================================
+grnwrap - groonga wrapper console
+=================================
+
+Copyright(C) 2011 Marici, Inc.
+
+:author: Michisu, Toshikazu <michisu@marici.co.jp>
+
+requires
+========
+
+ * Python 2.5 or higher
+ * readline module
+
+usage
+=====
+
+ $ grnwrap <groonga_db>
+
+more...
+
+ $ grnwrap -h

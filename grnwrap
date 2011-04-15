@@ -1,0 +1,204 @@
+#!/usr/bin/env python
+'''
+grnwrap - groonga wrapper console
+
+Copyright 2011, Marici, Inc.
+
+:author: Michisu, Toshikazu <michisu@marici.co.jp>
+'''
+import os
+import sys
+import code
+import glob
+import atexit
+import readline
+import optparse
+from subprocess import Popen, PIPE
+try:
+    import json
+except ImportError:
+    import simplejson as json
+
+GROONGA = '/usr/local/bin/groonga'
+
+# Groonga version 1.2.0
+grn_commands = ['cache_limit', 'check', 'clearlock', 'column_create',
+    'column_list', 'column_remove', 'define_selector', 'defrag', 'delete',
+    'dump', 'load', 'log_level', 'log_put', 'log_reopen', 'quit', 'select',
+    'shutdown', 'status', 'suggest', 'table_create', 'table_list',
+    'table_remove', 'view_add']
+grn_args = ['cache', 'column', 'columns', 'default_tokenizer',
+    'drilldown', 'drilldown_limit', 'drilldown_offset',
+    'drilldown_output_columns', 'drilldown_sortby', 'filter', 'flags',
+    'id', 'ifexists', 'input_type', 'key', 'key_type', 'level',
+    'limit', 'match_columns', 'match_escalation_threshold', 'max',
+    'message', 'name', 'obj', 'objname', 'offset',
+    'output_columns', 'query', 'scorer', 'sortby', 'source',
+    'table', 'tables', 'threshold', 'type', 'types', 'value_type',
+    'values', 'view']
+
+
+class HistoryConsole(code.InteractiveConsole):
+
+    def __init__(self, locals=None, filename="<console>",
+                 histfile=os.path.expanduser("~/.grnwrap-history"),
+                 completer=None):
+        code.InteractiveConsole.__init__(self)
+        self.init_history(histfile)
+        if completer:
+            readline.set_completer(completer)
+
+    def init_history(self, histfile):
+        readline.parse_and_bind("tab: complete")
+        if hasattr(readline, "read_history_file"):
+            try:
+                readline.read_history_file(histfile)
+            except IOError:
+                pass
+            atexit.register(self.save_history, histfile)
+
+    def save_history(self, histfile):
+        readline.write_history_file(histfile)
+
+
+class ProcessError(Exception):
+    pass
+
+
+class GroongaProcess(object):
+
+    def __init__(self, groonga_path, db_path, options=None):
+        self.args = ' '.join((groonga_path, db_path))
+        self.groonga = Popen(self.args, shell=True, stdin=PIPE, stdout=PIPE)
+        self.options = options
+
+    def execute(self, command):
+        self.groonga.stdin.write(command + '\n')
+        jsonstr = self.groonga.stdout.readline()
+        return json.loads(jsonstr)
+
+    def command(self, command):
+        self.groonga.stdin.write(command + '\n')
+        jsonstr = self.groonga.stdout.readline()
+        if (self.options and self.options.format_select and
+                command.startswith('select ')):
+            return self.format_select(jsonstr)
+        else:
+            return self.fix_json(jsonstr)
+
+    def run(self, file_path):
+        groonga = Popen(self.args, shell=True, stdin=file(file_path),
+            stdout=PIPE)
+        jsonstr = groonga.stdout.read()
+        groonga.wait()
+        return self.fix_json(jsonstr)
+
+    def fix_json(self, jsonstr):
+        try:
+            jsonobj = json.loads(jsonstr)
+            return json.dumps(jsonobj, ensure_ascii=False, indent=4)
+        except:
+            return jsonstr
+
+    def format_select(self, jsonstr):
+        try:
+            jsonobj = json.loads(jsonstr)
+
+            time = jsonobj[0][2]
+            hits = jsonobj[1][0][0][0]
+            columns = jsonobj[1][0][1]
+            if hits == 0:
+                results = []
+            else:
+                results = jsonobj[1][0][2:]
+
+            ret = []
+            colmaxlen = reduce(lambda x, y: max(x, y),
+                [len(name) for name, type in columns])
+            for i, result in enumerate(results):
+                title = ' %s. row ' % (i + 1)
+                ret.append(title.center(70, '*'))
+                for (colname, coltype), value in zip(columns, result):
+                    ret.append('%s: %s' % (colname.rjust(colmaxlen + 3),
+                        value))
+            ret.append('%s records / %s hits (%s sec)' % (len(results), hits,
+                time))
+            return '\n'.join(ret)
+        except:
+            return jsonstr
+
+    def close(self):
+        self.groonga.communicate()
+        self.groonga.wait()
+
+
+class GroongaCompleter(object):
+
+    arg_prefix = '--'
+
+    def __init__(self, groonga, options=None):
+        self.options = options
+        self.tables = []
+        try:
+            obj = groonga.execute('table_list')
+        except:
+            raise ProcessError('groonga tables were not found.')
+        for table in obj[1][1:]:
+            self.tables.append(table[1])
+
+    def complete(self, text, state):
+        if text.startswith(self.arg_prefix):
+            text = text[2:]
+            choices = grn_args
+            prefix = self.arg_prefix
+        else:
+            choices = grn_commands + self.tables
+            if self.options and self.options.complete_args:
+                choices += grn_args
+            choices += glob.glob('%s*' % text)
+            prefix = ''
+        results = [x for x in choices if x.startswith(text)]
+        return '%s%s ' % (prefix, results[state])
+
+
+def main():
+    usage = 'Usage: %prog [options] <groonga_db>'
+    parser = optparse.OptionParser(usage=usage)
+    parser.add_option('-c', '--complete-args', action='store_true',
+        dest='complete_args', default=False,
+        help='enable completing arguments by force')
+    parser.add_option('-G', action='store_true', dest='format_select',
+        default=False, help='format results like MySQL "\G" mode')
+    options, args = parser.parse_args()
+
+    if len(args) < 1:
+        sys.stderr.write('Usage: grnwrap <groonga_db>\n')
+        sys.exit(-1)
+    grn_db = args[0]
+
+    groonga = None
+
+    try:
+        groonga = GroongaProcess(GROONGA, grn_db, options)
+        completer = GroongaCompleter(groonga, options)
+        HistoryConsole(completer=completer.complete)
+
+        line = raw_input('> ')
+        while line:
+            line = line.strip()
+            if line.endswith('.grn'):
+                print groonga.run(line)
+            else:
+                print groonga.command(line)
+            line = raw_input('> ')
+    except ProcessError:
+        pass
+
+    if groonga:
+        groonga.close()
+
+if __name__ == '__main__':
+    try:
+        main()
+    except EOFError:
+        pass
