@@ -138,6 +138,7 @@ class GroongaCompleter(object):
 
     def __init__(self, groonga, options=None):
         self.options = options
+        self.running = False
         self.tables = []
         try:
             obj = groonga.execute('table_list')
@@ -147,18 +148,27 @@ class GroongaCompleter(object):
             self.tables.append(table[1])
 
     def complete(self, text, state):
+        prefix = ''
+        choices = []
         if text.startswith(self.arg_prefix):
             text = text[2:]
             choices = grn_args
             prefix = self.arg_prefix
         else:
+            # normal text or '-' stripped text
+            self.running = False
             choices = grn_commands + self.tables
             if self.options and self.options.complete_args:
                 choices += grn_args
             choices += glob.glob('%s*' % text)
-            prefix = ''
-        results = [x for x in choices if x.startswith(text)]
-        return '%s%s ' % (prefix, results[state])
+        results = [x for x in choices if not text or x.startswith(text)]
+        # avoid aborting on Max OS X
+        if not self.running:
+            results = results[:38]
+        if results:
+            return '%s%s ' % (prefix, results[state])
+        else:
+            return None
 
 
 def main():
