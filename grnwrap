@@ -174,6 +174,8 @@ class GroongaCompleter(object):
 def main():
     usage = 'Usage: %prog [options] <groonga_db>'
     parser = optparse.OptionParser(usage=usage)
+    parser.add_option('-g', '--groonga-path', dest='groonga_path',
+        default=None, help='groonga command path')
     parser.add_option('-c', '--complete-args', action='store_true',
         dest='complete_args', default=False,
         help='enable completing arguments by force')
@@ -189,7 +191,8 @@ def main():
     groonga = None
 
     try:
-        groonga = GroongaProcess(GROONGA, grn_db, options)
+        groonga_path = options.groonga_path or GROONGA
+        groonga = GroongaProcess(groonga_path, grn_db, options)
         completer = GroongaCompleter(groonga, options)
         HistoryConsole(completer=completer.complete)
 
