@@ -29,6 +29,7 @@ THE SOFTWARE.
 requires
 ========
 
+ * Groonga - http://groonga.org/
  * Python 2.6 or higher (or Python 2.4 or higher + simplejson) 
  * readline module
 
